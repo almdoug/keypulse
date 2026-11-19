@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>KeyPulse</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- Barra de título -->
+    <header class="titlebar" data-tauri-drag-region>
+      <div class="brand" data-tauri-drag-region>
+        <img class="logo" src="logo.svg" alt="" data-tauri-drag-region />
+        <span class="brand-name" data-tauri-drag-region>KeyPulse</span>
+        <span class="brand-sep" data-tauri-drag-region></span>
+        <span class="brand-tag" data-tauri-drag-region>Automação de teclas</span>
+      </div>
+      <div class="titlebar-center" data-tauri-drag-region>
+        <div class="status-pill" id="statusPill" data-state="idle">
+          <span class="status-dot"></span><span id="statusText">Pronto</span>
+        </div>
+      </div>
+      <div class="win-controls">
+        <button class="wc" id="wcMin" title="Minimizar" tabindex="-1">
+          <svg viewBox="0 0 12 12"><path d="M2 6h8" /></svg>
+        </button>
+        <button class="wc" id="wcMax" title="Maximizar" tabindex="-1">
+          <svg viewBox="0 0 12 12"><rect x="2.2" y="2.2" width="7.6" height="7.6" rx="1.4" /></svg>
+        </button>
+        <button class="wc close" id="wcClose" title="Fechar" tabindex="-1">
+          <svg viewBox="0 0 12 12"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7" /></svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <!-- 1. Janelas -->
+      <aside class="panel col-windows">
+        <div class="panel-head">
+          <div class="step-badge">1</div>
+          <div class="ph-text">
+            <h2>Janela alvo</h2>
+            <p><span id="winCount">0</span> janelas abertas</p>
+          </div>
+          <button class="icon-btn" id="refreshBtn" title="Atualizar lista"></button>
+        </div>
+        <label class="search">
+          <span class="search-ico" data-icon="search"></span>
+          <input id="searchInput" type="text" placeholder="Buscar janela ou processo…" spellcheck="false" autocomplete="off" />
+          <kbd class="kbd-hint">Ctrl K</kbd>
+        </label>
+        <div class="win-list" id="winList"></div>
+      </aside>
+
+      <!-- 2. Configuração -->
+      <section class="col-config" id="configCol">
+        <div class="lock-banner" id="lockBanner">
+          <span data-icon="lock"></span>
+          <span>Em execução — pare para editar a configuração</span>
+        </div>
+
+        <div class="card target-card" id="targetCard"></div>
+
+        <div class="card">
+          <div class="card-head">
+            <div class="step-badge">2</div>
+            <div class="ch-text">
+              <h3>Sequência de teclas</h3>
+              <p>Enviadas em ordem, uma após a outra, a cada ciclo</p>
+            </div>
+            <button class="btn btn-soft" id="addStepBtn"><span data-icon="plus"></span>Adicionar</button>
+          </div>
+          <ol class="steps" id="stepsList"></ol>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div class="step-badge">3</div>
+            <div class="ch-text">
+              <h3>Temporização</h3>
+              <p>Frequência dos ciclos e velocidade das teclas</p>
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field-label">
+              <span>Repetir a cada</span>
+              <span class="hint" id="rateHint"></span>
+            </div>
+            <div class="interval-row">
+              <div class="num-input big">
+                <button class="nudge" data-nudge="-1" tabindex="-1">−</button>
+                <input id="intervalInput" type="number" min="0.1" step="0.5" />
+                <span class="unit">seg</span>
+                <button class="nudge" data-nudge="1" tabindex="-1">+</button>
+              </div>
+              <div class="presets" id="presets"></div>
+            </div>
+          </div>
+
+          <div class="field split">
+            <div class="slider-field">
+              <div class="field-label"><span>Pausa entre combinações</span><output id="keyDelayOut"></output></div>
+              <input type="range" id="keyDelay" min="0" max="2000" step="10" />
+            </div>
+            <div class="slider-field">
+              <div class="field-label"><span>Tempo pressionada</span><output id="holdOut"></output></div>
+              <input type="range" id="hold" min="10" max="500" step="5" />
+            </div>
+          </div>
+
+          <div class="field">
+            <div class="field-label"><span>Repetições</span></div>
+            <div class="repeat-row">
+              <div class="segmented" id="repeatSeg">
+                <button data-v="infinite"><span data-icon="infinity"></span>Contínuo</button>
+                <button data-v="count"><span data-icon="hash"></span>Limitado</button>
+              </div>
+              <div class="num-input small" id="repeatCountWrap">
+                <input id="repeatCount" type="number" min="1" step="1" />
+                <span class="unit">ciclos</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div class="step-badge">4</div>
+            <div class="ch-text">
+              <h3>Modo de envio</h3>
+              <p>Como as teclas chegam até a janela</p>
+            </div>
+          </div>
+          <div class="mode-cards" id="modeCards">
+            <button class="mode" data-v="focus">
+              <span class="mode-ico" data-icon="target"></span>
+              <span class="mode-text">
+                <b>Focar janela</b>
+                <span>Traz a janela para frente e simula o teclado real. Funciona em praticamente tudo.</span>
+              </span>
+              <span class="mode-radio"></span>
+            </button>
+            <button class="mode" data-v="background">
+              <span class="mode-ico" data-icon="layers"></span>
+              <span class="mode-text">
+                <b>Segundo plano <em class="tag">Experimental</em></b>
+                <span>Envia direto para a janela sem tirar o foco de você. Funciona no Chrome, Edge e na maioria dos apps; jogos podem exigir o modo Focar.</span>
+              </span>
+              <span class="mode-radio"></span>
+            </button>
+          </div>
+          <div class="toggles">
+            <label class="toggle-row" id="restoreRow">
+              <span class="tr-text">
+                <b>Voltar para onde eu estava</b>
+                <span id="restoreHint">Devolve o foco à janela anterior depois de cada envio</span>
+              </span>
+              <input type="checkbox" class="switch" id="restoreFocus" />
+            </label>
+            <label class="toggle-row">
+              <span class="tr-text">
+                <b>Manter minimizada</b>
+                <span>Se a janela alvo estiver minimizada, ela recebe as teclas sem aparecer na tela</span>
+              </span>
+              <input type="checkbox" class="switch" id="keepMinimized" />
+            </label>
+            <label class="toggle-row">
+              <span class="tr-text">
+                <b>Enviar ao iniciar</b>
+                <span>Dispara o primeiro ciclo imediatamente, sem esperar o intervalo</span>
+              </span>
+              <input type="checkbox" class="switch" id="sendOnStart" />
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <!-- 3. Execução -->
+      <aside class="panel col-run">
+        <div class="ring-wrap" id="ringWrap">
+          <svg class="ring" viewBox="0 0 220 220">
+            <defs>
+              <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#8b7bff" />
+                <stop offset="1" stop-color="#38d6f0" />
+              </linearGradient>
+            </defs>
+            <circle class="ring-ticks" cx="110" cy="110" r="102" />
+            <circle class="ring-track" cx="110" cy="110" r="88" />
+            <circle class="ring-prog" id="ringProg" cx="110" cy="110" r="88" />
+          </svg>
+          <div class="ring-center">
+            <div class="ring-value" id="ringValue">5,0<small>s</small></div>
+            <div class="ring-label" id="ringLabel">intervalo</div>
+          </div>
+        </div>
+
+        <button class="btn-run" id="runBtn"></button>
+        <button class="btn btn-outline wide" id="testBtn"><span data-icon="zap"></span>Testar uma vez</button>
+
+        <div class="stats">
+          <div class="stat"><span class="stat-v" id="statCycles">0</span><span class="stat-l">Ciclos</span></div>
+          <div class="stat"><span class="stat-v" id="statKeys">0</span><span class="stat-l">Combinações</span></div>
+          <div class="stat"><span class="stat-v" id="statUptime">00:00</span><span class="stat-l">Ativo</span></div>
+        </div>
+
+        <div class="log-head">
+          <h4>Atividade</h4>
+          <button class="link-btn" id="clearLog">Limpar</button>
+        </div>
+        <ul class="log" id="log"></ul>
+
+        <div class="hotkey-hint">
+          <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>F12</kbd>
+          <span>inicia / para</span>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <!-- Editor de combinação -->
+  <div class="modal-backdrop" id="modal" hidden>
+    <div class="modal" role="dialog" aria-modal="true">
+      <div class="modal-head">
+        <div>
+          <h3 id="modalTitle">Nova combinação</h3>
+          <p>Pressione as teclas no teclado ou monte manualmente abaixo</p>
+        </div>
+        <button class="icon-btn" id="modalClose" title="Fechar"></button>
+      </div>
+
+      <div class="capture" id="capture" tabindex="0">
+        <div class="capture-keys" id="captureKeys"></div>
+        <div class="capture-hint" id="captureHint"></div>
+      </div>
+
+      <div class="divider"><span>ou monte manualmente</span></div>
+
+      <div class="builder">
+        <div class="mod-toggles" id="modToggles">
+          <button data-mod="ctrl">Ctrl</button>
+          <button data-mod="alt">Alt</button>
+          <button data-mod="shift">Shift</button>
+          <button data-mod="win">Win</button>
+        </div>
+        <label class="search small">
+          <span class="search-ico" data-icon="search"></span>
+          <input id="keySearch" type="text" placeholder="Buscar tecla — ex.: F5, Enter, Num 1, seta" spellcheck="false" autocomplete="off" />
+        </label>
+      </div>
+      <div class="key-palette" id="keyPalette"></div>
+
+      <div class="modal-foot">
+        <span class="foot-preview" id="footPreview"></span>
+        <button class="btn btn-ghost" id="modalCancel">Cancelar</button>
+        <button class="btn btn-primary" id="modalSave">Salvar combinação</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+  <script src="app.js"></script>
+</body>
+</html>
