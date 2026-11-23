@@ -22,10 +22,11 @@ use windows_sys::Win32::System::Threading::{
 };
 use windows_sys::Win32::UI::Shell::ExtractIconExW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DestroyIcon, DrawIconEx, EnumWindows, GetClassLongPtrW, GetWindow, GetWindowLongPtrW,
-    GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
-    SendMessageTimeoutW, DI_NORMAL, GCLP_HICON, GCLP_HICONSM, GWL_EXSTYLE, GW_OWNER, HICON,
-    ICON_BIG, ICON_SMALL2, SMTO_ABORTIFHUNG, WM_GETICON, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    DestroyIcon, DrawIconEx, EnumWindows, GetClassLongPtrW, GetDesktopWindow, GetWindow,
+    GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
+    IsWindowVisible, SendMessageTimeoutW, DI_NORMAL, GCLP_HICON, GCLP_HICONSM, GWL_EXSTYLE,
+    GW_CHILD, GW_HWNDNEXT, GW_OWNER, HICON, ICON_BIG, ICON_SMALL2, SMTO_ABORTIFHUNG, WM_GETICON,
+    WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
 };
 
 const ICON_SIZE: i32 = 32;
@@ -54,10 +55,27 @@ unsafe extern "system" fn collect(hwnd: HWND, lparam: LPARAM) -> BOOL {
 }
 
 /// Todas as janelas de nível superior, em ordem Z (a mais recente primeiro).
+///
+/// `EnumWindows` é a via normal, mas o Windows esconde algumas janelas nela:
+/// o cliente do RubinOT, por exemplo, tem janelas visíveis, com título, no topo
+/// da ordem Z e ainda assim nunca aparece na enumeração (nem no Alt+Tab). A
+/// cadeia de janelas irmãs do desktop (`GetWindow`) não passa por esse filtro,
+/// então lemos as duas fontes e unimos os resultados.
 pub fn enum_top_level() -> Vec<HWND> {
     let mut out: Vec<HWND> = Vec::new();
     unsafe {
         EnumWindows(Some(collect), &mut out as *mut Vec<HWND> as LPARAM);
+
+        let mut seen: HashSet<isize> = out.iter().map(|h| *h as isize).collect();
+        let mut hwnd = GetWindow(GetDesktopWindow(), GW_CHILD);
+        let mut guard = 0u32;
+        while !hwnd.is_null() && guard < 10_000 {
+            if seen.insert(hwnd as isize) {
+                out.push(hwnd);
+            }
+            hwnd = GetWindow(hwnd, GW_HWNDNEXT);
+            guard += 1;
+        }
     }
     out
 }
