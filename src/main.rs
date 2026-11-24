@@ -4,6 +4,8 @@ mod engine;
 mod ghost;
 mod hotkey;
 mod input;
+mod recorder;
+mod routefile;
 mod storage;
 mod winlist;
 
@@ -22,6 +24,11 @@ fn main() {
             engine::stop,
             engine::is_running,
             engine::test_sequence,
+            routefile::export_route,
+            routefile::import_route,
+            recorder::start_recording,
+            recorder::stop_recording,
+            recorder::cancel_recording,
             storage::load_config,
             storage::save_config,
         ])

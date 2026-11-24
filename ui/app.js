@@ -18,6 +18,8 @@ const PATHS = {
   up: '<path d="m18 15-6-6-6 6"/>',
   down: '<path d="m6 9 6 6 6-6"/>',
   copy: '<rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>',
+  download: '<path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/>',
+  upload: '<path d="M12 15V4"/><path d="m7 9 5-5 5 5"/><path d="M5 20h14"/>',
   trash: '<path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="m19 6-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   x: '<path d="M18 6 6 18M6 6l12 12"/>',
@@ -37,6 +39,7 @@ const PATHS = {
   alert: '<path d="M12 3 2 20h20Z"/><path d="M12 10v4M12 17h.01"/>',
   dot: '<circle cx="12" cy="12" r="4" fill="currentColor"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  move: '<path d="M12 2v20M2 12h20"/><path d="m9 5 3-3 3 3M9 19l3 3 3-3M5 9l-3 3 3 3M19 9l3 3-3 3"/>',
 };
 const icon = (name) =>
   `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${PATHS[name] || ''}</svg>`;
@@ -46,6 +49,16 @@ const hydrateIcons = (root = document) =>
 /* ---------- Teclas (códigos virtuais do Windows) ---------- */
 const seq = (n, f) => Array.from({ length: n }, (_, i) => f(i));
 const KEY_GROUPS = [
+  {
+    name: 'Mouse',
+    keys: [
+      { mouse: 'left', label: 'Clique esquerdo', alias: 'botao left click mouse1' },
+      { mouse: 'right', label: 'Clique direito', alias: 'botao right click mouse2' },
+      { mouse: 'middle', label: 'Clique do scroll', alias: 'botao meio middle roda mouse3' },
+      { mouse: 'wheelUp', label: 'Scroll ↑', alias: 'roda rolar cima up wheel' },
+      { mouse: 'wheelDown', label: 'Scroll ↓', alias: 'roda rolar baixo down wheel' },
+    ],
+  },
   { name: 'Função', keys: seq(24, (i) => ({ vk: 112 + i, label: `F${i + 1}` })) },
   { name: 'Letras', keys: seq(26, (i) => ({ vk: 65 + i, label: String.fromCharCode(65 + i) })) },
   { name: 'Números', keys: seq(10, (i) => ({ vk: 48 + i, label: String(i) })) },
@@ -122,7 +135,8 @@ const VK_LABEL = new Map();
 const SYMBOL_VKS = new Set(KEY_GROUPS.at(-1).keys.map((k) => k.vk));
 KEY_GROUPS.forEach((g) =>
   g.keys.forEach((k) => {
-    if (!VK_LABEL.has(k.vk)) VK_LABEL.set(k.vk, k.label);
+    k.id = k.mouse ? `m:${k.mouse}` : `vk:${k.vk}`;
+    if (k.vk != null && !VK_LABEL.has(k.vk)) VK_LABEL.set(k.vk, k.label);
     k.search = `${k.label} ${k.alias || ''} ${g.name}`.toLowerCase();
   }),
 );
@@ -134,12 +148,18 @@ const MODS = [
   ['win', 'Win'],
 ];
 
-const comboParts = (s) => [...MODS.filter(([k]) => s[k]).map(([, l]) => l), s.label || `VK ${s.vk}`];
+const hasMain = (s) => s.vk != null || !!s.mouse;
+const stepId = (s) => (s.mouse ? `m:${s.mouse}` : s.vk != null ? `vk:${s.vk}` : null);
+const mainLabel = (s) => s.label || (s.mouse ? s.mouse : `VK ${s.vk}`);
+const comboParts = (s) => [...MODS.filter(([k]) => s[k]).map(([, l]) => l), mainLabel(s)];
 const comboText = (s) => comboParts(s).join(' + ');
 function keycaps(s, { pendingKey = false } = {}) {
   const mods = MODS.filter(([k]) => s[k]).map(([, l]) => `<kbd class="cap mod">${l}</kbd>`);
-  const key =
-    s.vk != null ? `<kbd class="cap">${esc(s.label || `VK ${s.vk}`)}</kbd>` : pendingKey ? '<kbd class="cap ghost">?</kbd>' : null;
+  const key = hasMain(s)
+    ? `<kbd class="cap">${esc(mainLabel(s))}</kbd>`
+    : pendingKey
+      ? '<kbd class="cap ghost">?</kbd>'
+      : null;
   return [...mods, key].filter(Boolean).join('<span class="plus">+</span>');
 }
 
@@ -159,6 +179,16 @@ const DEFAULTS = {
   sendOnStart: true,
   repeatMode: 'infinite',
   repeatCount: 10,
+  route: {
+    enabled: false,
+    stepMs: 300,
+    legs: [
+      { type: 'wait', sec: 10 },
+      { type: 'move', vk: 39, count: 10 },
+      { type: 'wait', sec: 10 },
+      { type: 'move', vk: 37, count: 10 },
+    ],
+  },
 };
 const PRESETS = [1, 5, 10, 30, 60, 300];
 
@@ -318,13 +348,19 @@ function renderSteps() {
     return;
   }
   const last = config.steps.length - 1;
+  // A pausa só existe entre passos da sequência principal; os de intervalo próprio rodam à parte.
+  let seenMain = false;
   stepsList.innerHTML = config.steps
-    .map(
-      (s, i) => `
-      ${i > 0 ? `<li class="step-gap">${icon('clock')}${config.keyDelayMs} ms</li>` : ''}
-      <li class="step" data-i="${i}">
+    .map((s, i) => {
+      const own = s.intervalSec != null;
+      const gap = !own && seenMain;
+      if (!own) seenMain = true;
+      return `
+      ${gap ? `<li class="step-gap">${icon('clock')}${config.keyDelayMs} ms</li>` : ''}
+      <li class="step${own ? ' own' : ''}" data-i="${i}">
         <span class="step-idx">${String(i + 1).padStart(2, '0')}</span>
         <div class="combo">${keycaps(s)}</div>
+        ${own ? `<span class="step-own" title="Intervalo próprio: repete independente da sequência principal">${icon('clock')}a cada ${fmtSec(s.intervalSec)}</span>` : ''}
         <div class="step-actions">
           <button class="icon-btn sm" data-act="edit" title="Editar">${icon('edit')}</button>
           <button class="icon-btn sm" data-act="up" title="Mover para cima" ${i === 0 ? 'disabled' : ''}>${icon('up')}</button>
@@ -332,8 +368,8 @@ function renderSteps() {
           <button class="icon-btn sm" data-act="dup" title="Duplicar">${icon('copy')}</button>
           <button class="icon-btn sm danger" data-act="del" title="Remover">${icon('trash')}</button>
         </div>
-      </li>`,
-    )
+      </li>`;
+    })
     .join('');
 }
 
@@ -371,6 +407,8 @@ $('#addStepBtn').addEventListener('click', () => openEditor(-1));
 const modal = $('#modal');
 const keySearch = $('#keySearch');
 const capture = $('#capture');
+const ownIntervalOn = $('#ownIntervalOn');
+const ownIntervalSec = $('#ownIntervalSec');
 let editingIndex = -1;
 let draft = null;
 const held = new Set();
@@ -380,10 +418,12 @@ function openEditor(index) {
   editingIndex = index;
   draft =
     index >= 0
-      ? { ...config.steps[index] }
-      : { ctrl: false, alt: false, shift: false, win: false, vk: null, label: '' };
+      ? { mouse: null, intervalSec: null, ...config.steps[index] }
+      : { ctrl: false, alt: false, shift: false, win: false, vk: null, mouse: null, label: '', intervalSec: null };
   $('#modalTitle').textContent = index >= 0 ? `Editar combinação ${index + 1}` : 'Nova combinação';
   keySearch.value = '';
+  ownIntervalOn.checked = draft.intervalSec != null;
+  ownIntervalSec.value = draft.intervalSec ?? Math.max(1, config.intervalSec);
   held.clear();
   modal.hidden = false;
   renderPalette();
@@ -397,7 +437,7 @@ function closeEditor() {
 }
 
 function renderDraft() {
-  const empty = !MODS.some(([k]) => draft[k]) && draft.vk == null;
+  const empty = !MODS.some(([k]) => draft[k]) && !hasMain(draft);
   $('#captureKeys').innerHTML = empty
     ? '<kbd class="cap ghost">Ctrl</kbd><span class="plus">+</span><kbd class="cap ghost">Alt</kbd><span class="plus">+</span><kbd class="cap ghost">F1</kbd>'
     : keycaps(draft, { pendingKey: true });
@@ -407,9 +447,18 @@ function renderDraft() {
     ? '<span class="rec-dot"></span>Gravando — pressione a combinação desejada'
     : 'Clique aqui para gravar pelo teclado';
   $$('#modToggles button').forEach((b) => b.classList.toggle('active', !!draft[b.dataset.mod]));
-  $$('.kp-key').forEach((b) => b.classList.toggle('active', Number(b.dataset.vk) === draft.vk));
-  $('#modalSave').disabled = draft.vk == null;
-  $('#footPreview').textContent = draft.vk == null ? 'Escolha uma tecla principal' : comboText(draft);
+  const id = stepId(draft);
+  $$('.kp-key').forEach((b) => b.classList.toggle('active', b.dataset.id === id));
+  $('#ownIntervalWrap').classList.toggle('off', !ownIntervalOn.checked);
+  $('#modalSave').disabled = !hasMain(draft);
+  $('#footPreview').textContent = !hasMain(draft)
+    ? 'Escolha uma tecla ou ação do mouse'
+    : comboText(draft) + (ownIntervalOn.checked ? ` · a cada ${fmtSec(readOwnInterval())}` : '');
+}
+
+function readOwnInterval() {
+  const v = parseFloat(String(ownIntervalSec.value).replace(',', '.'));
+  return Number.isFinite(v) ? Math.max(0.1, Math.round(v * 10) / 10) : Math.max(1, config.intervalSec);
 }
 
 function renderPalette() {
@@ -418,7 +467,7 @@ function renderPalette() {
     const keys = g.keys.filter((k) => !q || k.search.includes(q));
     if (!keys.length) return '';
     return `<div class="kp-group"><div class="kp-title">${g.name}</div><div class="kp-keys">${keys
-      .map((k) => `<button class="kp-key" data-vk="${k.vk}" data-label="${esc(k.label)}" tabindex="-1">${esc(k.label)}</button>`)
+      .map((k) => `<button class="kp-key" data-id="${k.id}" data-label="${esc(k.label)}" tabindex="-1">${esc(k.label)}</button>`)
       .join('')}</div></div>`;
   }).join('');
   $('#keyPalette').innerHTML = html || `<div class="empty">${icon('search')}<div>Nenhuma tecla encontrada</div></div>`;
@@ -434,10 +483,17 @@ capture.addEventListener('click', () => capture.focus());
 $('#keyPalette').addEventListener('click', (e) => {
   const b = e.target.closest('.kp-key');
   if (!b) return;
-  draft.vk = Number(b.dataset.vk);
+  const [kind, value] = b.dataset.id.split(':');
+  draft.mouse = kind === 'm' ? value : null;
+  draft.vk = kind === 'm' ? null : Number(value);
   draft.label = b.dataset.label;
   renderDraft();
 });
+ownIntervalOn.addEventListener('change', () => {
+  renderDraft();
+  if (ownIntervalOn.checked) ownIntervalSec.focus();
+});
+ownIntervalSec.addEventListener('input', () => renderDraft());
 $('#modToggles').addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (!b) return;
@@ -448,8 +504,17 @@ $('#modalCancel').addEventListener('click', closeEditor);
 $('#modalClose').addEventListener('click', closeEditor);
 modal.addEventListener('mousedown', (e) => e.target === modal && closeEditor());
 $('#modalSave').addEventListener('click', () => {
-  if (draft.vk == null) return;
-  const step = { ctrl: !!draft.ctrl, alt: !!draft.alt, shift: !!draft.shift, win: !!draft.win, vk: draft.vk, label: draft.label };
+  if (!hasMain(draft)) return;
+  const step = {
+    ctrl: !!draft.ctrl,
+    alt: !!draft.alt,
+    shift: !!draft.shift,
+    win: !!draft.win,
+    vk: draft.mouse ? null : draft.vk,
+    mouse: draft.mouse || null,
+    label: draft.label,
+    intervalSec: ownIntervalOn.checked ? readOwnInterval() : null,
+  };
   if (editingIndex >= 0) config.steps[editingIndex] = step;
   else config.steps.push(step);
   save();
@@ -477,9 +542,9 @@ function onRecordKey(e) {
     if (vk === 18 || vk === 164 || vk === 165) mods.alt = true;
     if (vk === 16 || vk === 160 || vk === 161) mods.shift = true;
     if (vk === 91 || vk === 92) mods.win = true;
-    draft = { ...mods, vk: null, label: '' };
+    draft = { ...mods, vk: null, mouse: null, label: '' };
   } else {
-    draft = { ...mods, vk, label: labelForEvent(e, vk) };
+    draft = { ...mods, vk, mouse: null, label: labelForEvent(e, vk) };
   }
   renderDraft();
 }
@@ -487,6 +552,7 @@ function onRecordKey(e) {
 /* ---------- Temporização e opções ---------- */
 const intervalInput = $('#intervalInput');
 const fmtNum = (n, d = 1) => n.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: d });
+const fmtSec = (s) => (s >= 60 && s % 60 === 0 ? `${s / 60} min` : `${fmtNum(s)} s`);
 const fmtPreset = (s) => (s >= 60 ? `${s / 60}min` : `${s}s`);
 
 function renderTiming() {
@@ -583,6 +649,296 @@ $('#sendOnStart').addEventListener('change', (e) => {
   save();
 });
 
+/* ---------- Rota de caminhada ---------- */
+const DIRS = [
+  { vk: 38, label: '↑', name: 'cima' },
+  { vk: 40, label: '↓', name: 'baixo' },
+  { vk: 37, label: '←', name: 'esquerda' },
+  { vk: 39, label: '→', name: 'direita' },
+];
+const dirLabel = (vk) => DIRS.find((d) => d.vk === vk)?.label || VK_LABEL.get(vk) || `VK ${vk}`;
+const legsList = $('#legsList');
+let routeLive = null; // { leg, progress } enquanto roda
+
+function renderRoute() {
+  const r = config.route;
+  $('#routeOn').checked = r.enabled;
+  $('#routeBody').classList.toggle('off', !r.enabled);
+  $('#routeStepMs').value = r.stepMs;
+  $('#routeSub').textContent = r.name && r.legs.length ? `Hunt: ${r.name}` : 'Anda de box em box em loop, enquanto a sequência continua';
+  if (!r.legs.length) {
+    legsList.innerHTML = '<li class="route-empty">Nenhum trecho. Adicione um <b>Parado</b> e um <b>Andar</b>.</li>';
+    return;
+  }
+  const last = r.legs.length - 1;
+  legsList.innerHTML = r.legs
+    .map((l, i) => {
+      const active = running && r.enabled && routeLive?.leg === i;
+      const wait = l.type === 'wait';
+      const fields = wait
+        ? `<div class="num-input small"><input data-f="sec" type="number" min="0.1" step="1" value="${l.sec}" /><span class="unit">seg</span></div>`
+        : `<div class="dirs">${DIRS.map(
+            (d) => `<button data-dir="${d.vk}" class="${l.vk === d.vk ? 'active' : ''}" title="Seta para ${d.name}">${d.label}</button>`,
+          ).join('')}</div>
+          <span class="leg-x">×</span>
+          <div class="num-input small"><input data-f="count" type="number" min="1" step="1" value="${l.count}" /><span class="unit">sqm</span></div>`;
+      const progress = !active ? '' : wait ? 'parado' : `${routeLive.progress}/${l.count}`;
+      return `<li class="leg${active ? ' active' : ''}" data-i="${i}">
+        <span class="leg-kind">${icon(wait ? 'clock' : 'move')}${wait ? 'Parado' : 'Andar'}</span>
+        <div class="leg-fields">${fields}</div>
+        <span class="leg-progress">${progress}</span>
+        <div class="step-actions">
+          <button class="icon-btn sm" data-act="up" title="Mover para cima" ${i === 0 ? 'disabled' : ''}>${icon('up')}</button>
+          <button class="icon-btn sm" data-act="down" title="Mover para baixo" ${i === last ? 'disabled' : ''}>${icon('down')}</button>
+          <button class="icon-btn sm" data-act="dup" title="Duplicar">${icon('copy')}</button>
+          <button class="icon-btn sm danger" data-act="del" title="Remover">${icon('trash')}</button>
+        </div>
+      </li>`;
+    })
+    .join('');
+}
+
+legsList.addEventListener('click', (e) => {
+  const li = e.target.closest('.leg');
+  if (!li) return;
+  const i = Number(li.dataset.i);
+  const legs = config.route.legs;
+  const dir = e.target.closest('[data-dir]');
+  const btn = e.target.closest('[data-act]');
+  if (dir) legs[i].vk = Number(dir.dataset.dir);
+  else if (!btn) return;
+  else if (btn.dataset.act === 'up') [legs[i - 1], legs[i]] = [legs[i], legs[i - 1]];
+  else if (btn.dataset.act === 'down') [legs[i + 1], legs[i]] = [legs[i], legs[i + 1]];
+  else if (btn.dataset.act === 'dup') legs.splice(i + 1, 0, { ...legs[i] });
+  else if (btn.dataset.act === 'del') legs.splice(i, 1);
+  save();
+  renderRoute();
+});
+legsList.addEventListener('change', (e) => {
+  const input = e.target.closest('[data-f]');
+  if (!input) return;
+  const leg = config.route.legs[Number(input.closest('.leg').dataset.i)];
+  const v = parseFloat(String(input.value).replace(',', '.'));
+  if (input.dataset.f === 'sec') leg.sec = Number.isFinite(v) ? Math.max(0.1, Math.round(v * 10) / 10) : leg.sec;
+  else leg.count = Number.isFinite(v) ? Math.max(1, Math.round(v)) : leg.count;
+  save();
+  renderRoute();
+});
+$('#routeOn').addEventListener('change', (e) => {
+  config.route.enabled = e.target.checked;
+  save();
+  renderRoute();
+});
+$('#routeStepMs').addEventListener('change', (e) => {
+  const v = Math.round(Number(e.target.value));
+  config.route.stepMs = Number.isFinite(v) && v > 0 ? Math.max(50, v) : config.route.stepMs;
+  save();
+  renderRoute();
+});
+$('#addWaitBtn').addEventListener('click', () => {
+  config.route.legs.push({ type: 'wait', sec: 10 });
+  save();
+  renderRoute();
+});
+$('#addMoveBtn').addEventListener('click', () => {
+  config.route.legs.push({ type: 'move', vk: 38, count: 10 });
+  save();
+  renderRoute();
+});
+
+/* Limpar todos os trechos: pede um segundo clique para confirmar. */
+let clearArmed = null;
+function disarmClear() {
+  clearTimeout(clearArmed);
+  clearArmed = null;
+  const btn = $('#clearLegsBtn');
+  btn.classList.remove('armed');
+  btn.innerHTML = `${icon('trash')}Limpar tudo`;
+}
+$('#clearLegsBtn').addEventListener('click', () => {
+  if (!config.route.legs.length) return toast('A rota já está vazia', 'info');
+  if (running && routeActive()) return toast('Pare a execução antes de limpar a rota', 'error');
+  if (!clearArmed) {
+    const btn = $('#clearLegsBtn');
+    btn.classList.add('armed');
+    btn.innerHTML = `${icon('trash')}Confirmar: apagar ${config.route.legs.length} trechos`;
+    clearArmed = setTimeout(disarmClear, 3500);
+    return;
+  }
+  disarmClear();
+  const n = config.route.legs.length;
+  config.route.legs = [];
+  config.route.name = null;
+  save();
+  renderRoute();
+  toast(`${n} trechos removidos`, 'ok');
+});
+
+/* Salvar / importar a rota num arquivo .json para compartilhar a hunt. */
+const DIR_NAMES = { 38: 'up', 40: 'down', 37: 'left', 39: 'right' };
+const DIR_VK = { up: 38, down: 40, left: 37, right: 39 };
+
+function routeToFile() {
+  return JSON.stringify(
+    {
+      keypulse: 'rota',
+      version: 1,
+      stepMs: config.route.stepMs,
+      legs: config.route.legs.map((l) =>
+        l.type === 'wait' ? { type: 'wait', sec: l.sec } : { type: 'move', dir: DIR_NAMES[l.vk] || l.vk, count: l.count },
+      ),
+    },
+    null,
+    2,
+  );
+}
+
+/* Valida o arquivo e devolve { name, stepMs, legs } ou lança um erro legível. */
+function routeFromFile(text, name) {
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch (_) {
+    throw new Error('O arquivo não é uma rota do KeyPulse');
+  }
+  if (!data || data.keypulse !== 'rota' || !Array.isArray(data.legs)) throw new Error('O arquivo não é uma rota do KeyPulse');
+  if (data.version > 1) throw new Error('Essa rota foi salva numa versão mais nova do KeyPulse');
+  if (!data.legs.length) throw new Error('A rota do arquivo não tem nenhum trecho');
+  if (data.legs.length > 2000) throw new Error('A rota do arquivo tem trechos demais');
+  const legs = data.legs.map((l, i) => {
+    const where = `trecho ${i + 1}`;
+    if (l?.type === 'wait') {
+      const sec = Number(l.sec);
+      if (!Number.isFinite(sec) || sec < 0.1 || sec > 86400) throw new Error(`Rota inválida: tempo parado do ${where}`);
+      return { type: 'wait', sec: Math.round(sec * 10) / 10 };
+    }
+    if (l?.type === 'move') {
+      const vk = DIR_VK[l.dir] ?? (Object.keys(DIR_NAMES).map(Number).includes(l.dir) ? l.dir : null);
+      const count = Math.round(Number(l.count));
+      if (vk == null) throw new Error(`Rota inválida: direção do ${where}`);
+      if (!Number.isFinite(count) || count < 1 || count > 1000) throw new Error(`Rota inválida: sqm do ${where}`);
+      return { type: 'move', vk, count };
+    }
+    throw new Error(`Rota inválida: tipo do ${where}`);
+  });
+  const stepMs = Math.round(Number(data.stepMs));
+  return { name, legs, stepMs: Number.isFinite(stepMs) && stepMs >= 50 && stepMs <= 10000 ? stepMs : null };
+}
+
+const routeSummary = (legs) => `${legs.length} trechos, ${legs.reduce((n, l) => n + (l.count || 0), 0)} sqm`;
+
+$('#routeExportBtn').addEventListener('click', async () => {
+  if (!config.route.legs.length) return toast('A rota está vazia; grave ou monte os trechos antes de salvar', 'error');
+  try {
+    // O nome da hunt é o nome do arquivo escolhido na janela de salvar.
+    const name = await invoke('export_route', { name: config.route.name || 'Minha hunt', content: routeToFile() });
+    if (name == null) return;
+    config.route.name = name;
+    save();
+    renderRoute();
+    toast(`Rota "${name}" salva`, 'ok');
+    addLog('ok', `Rota "${name}" salva (${routeSummary(config.route.legs)})`);
+  } catch (e) {
+    toast(String(e), 'error', 4500);
+  }
+});
+
+$('#routeImportBtn').addEventListener('click', async () => {
+  if (recording) return;
+  if (running && routeActive()) return toast('Pare a execução antes de importar uma rota', 'error');
+  try {
+    const file = await invoke('import_route');
+    if (!file) return;
+    const route = routeFromFile(file.content, file.name);
+    config.route.legs = route.legs;
+    if (route.stepMs) config.route.stepMs = route.stepMs;
+    config.route.name = route.name;
+    config.route.enabled = true;
+    save();
+    renderRoute();
+    toast(`Rota "${route.name}" importada: ${routeSummary(route.legs)}`, 'ok', 4500);
+    addLog('ok', `Rota "${route.name}" importada (${routeSummary(route.legs)}, ${route.stepMs ?? config.route.stepMs} ms por sqm)`);
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), 'error', 5000);
+  }
+});
+
+/* Gravação livre: o backend captura as setas apertadas no jogo e devolve os trechos. */
+let recording = false;
+
+function renderRecording(text) {
+  $('#routeCard').classList.toggle('recording', recording);
+  $('#recBanner').hidden = !recording;
+  if (text != null) $('#recCount').textContent = text;
+}
+
+async function startRecording() {
+  if (recording) return;
+  if (!config.target) return toast('Selecione a janela do jogo na lista antes de gravar', 'error');
+  if (running && routeActive()) return toast('Pare a execução ou desligue a rota antes de gravar', 'error');
+  try {
+    await invoke('start_recording', { hwnd: config.target.hwnd, process: config.target.process });
+  } catch (e) {
+    return toast(String(e), 'error');
+  }
+  recording = true;
+  renderRecording('Nenhuma seta ainda');
+  addLog('info', 'Gravação iniciada — faça o caminho da cave no jogo');
+}
+
+async function stopRecording() {
+  if (!recording) return;
+  try {
+    const legs = await invoke('stop_recording', { stepMs: config.route.stepMs });
+    config.route.legs = legs;
+    config.route.name = null;
+    config.route.enabled = true;
+    save();
+    const sqm = legs.reduce((n, l) => n + (l.count || 0), 0);
+    addLog('ok', `Rota gravada: ${legs.length} trechos, ${sqm} sqm`);
+    toast(running ? 'Rota gravada — vale a partir do próximo Iniciar' : 'Rota gravada', 'ok');
+  } catch (e) {
+    addLog('warn', String(e));
+    toast(String(e), 'error', 4500);
+  } finally {
+    recording = false;
+    renderRecording();
+    renderRoute();
+  }
+}
+
+async function cancelRecording() {
+  await invoke('cancel_recording').catch(() => {});
+  recording = false;
+  renderRecording();
+  addLog('info', 'Gravação cancelada');
+}
+
+$('#recordBtn').addEventListener('click', startRecording);
+$('#recStop').addEventListener('click', stopRecording);
+$('#recCancel').addEventListener('click', cancelRecording);
+listen('recorder:key', ({ payload }) => {
+  const n = payload.count;
+  renderRecording(`${n} ${n === 1 ? 'seta' : 'setas'} · última ${dirLabel(payload.vk)}`);
+});
+
+const routeActive = () => config.route.enabled && config.route.legs.length > 0;
+function buildRoute() {
+  if (!routeActive()) return null;
+  return {
+    stepMs: config.route.stepMs,
+    legs: config.route.legs.map((l) =>
+      l.type === 'wait'
+        ? { type: 'wait', ms: Math.round(l.sec * 1000) }
+        : {
+            type: 'move',
+            count: l.count,
+            key: { ctrl: false, alt: false, shift: false, win: false, vk: l.vk, mouse: null, label: dirLabel(l.vk) },
+          },
+    ),
+  };
+}
+
 /* ---------- Execução ---------- */
 const RING_LEN = 2 * Math.PI * 88;
 const ringProg = $('#ringProg');
@@ -638,6 +994,8 @@ function renderRunState() {
 function setRunning(value) {
   if (running === value) return;
   running = value;
+  routeLive = null;
+  renderRoute();
   if (running) {
     finished = false;
     startedAt = Date.now();
@@ -657,7 +1015,16 @@ function renderStats() {
 function buildRunConfig() {
   return {
     target: config.target,
-    steps: config.steps.map(({ ctrl, alt, shift, win, vk, label }) => ({ ctrl, alt, shift, win, vk, label })),
+    steps: config.steps.map(({ ctrl, alt, shift, win, vk, mouse, label, intervalSec }) => ({
+      ctrl,
+      alt,
+      shift,
+      win,
+      vk: mouse ? 0 : vk,
+      mouse: mouse || null,
+      label,
+      intervalMs: intervalSec != null ? Math.round(intervalSec * 1000) : null,
+    })),
     intervalMs: Math.round(config.intervalSec * 1000),
     keyDelayMs: config.keyDelayMs,
     holdMs: config.holdMs,
@@ -666,18 +1033,20 @@ function buildRunConfig() {
     keepMinimized: config.keepMinimized,
     sendOnStart: config.sendOnStart,
     repeat: config.repeatMode === 'count' ? config.repeatCount : null,
+    route: buildRoute(),
   };
 }
 
 function validate() {
   if (!config.target) return 'Selecione a janela alvo na lista à esquerda';
-  if (!config.steps.length) return 'Adicione pelo menos uma combinação de teclas';
+  if (!config.steps.length && !routeActive()) return 'Adicione pelo menos uma combinação de teclas ou ligue a rota';
   return null;
 }
 
 async function startRun() {
   const err = validate();
   if (err) return toast(err, 'error');
+  if (recording && routeActive()) return toast('Termine a gravação ou desligue a rota antes de iniciar', 'error');
   try {
     await invoke('start', { config: buildRunConfig() });
     setRunning(true);
@@ -745,6 +1114,14 @@ function toast(message, kind = 'info', ms = 3200) {
 /* ---------- Eventos do backend ---------- */
 listen('engine:status', ({ payload }) => setRunning(payload.running));
 listen('engine:log', ({ payload }) => addLog(payload.level, payload.message));
+listen('engine:route', ({ payload }) => {
+  routeLive = { leg: payload.leg, progress: payload.progress };
+  if (payload.sent) {
+    stats.keys += payload.sent;
+    renderStats();
+  }
+  renderRoute();
+});
 listen('engine:cycle', ({ payload }) => {
   if (payload.cycle > 0) {
     stats.cycles = payload.cycle;
@@ -759,19 +1136,21 @@ listen('engine:cycle', ({ payload }) => {
     nextAt = null;
     finished = true;
   } else {
-    cycleTotal = Math.round(config.intervalSec * 1000);
+    cycleTotal = payload.nextPeriodMs ?? Math.round(config.intervalSec * 1000);
     nextAt = performance.now() + payload.nextInMs;
   }
 });
 listen('hotkey:toggle', () => {
   if (!modal.hidden) return;
+  // Gravando, o atalho encerra a gravação (você está no jogo, longe do botão).
+  if (recording) return stopRecording();
   toggleRun();
 });
 
 /* ---------- Teclado e janela ---------- */
 document.addEventListener('keydown', (e) => {
   if (!modal.hidden) {
-    if (document.activeElement === keySearch) {
+    if (document.activeElement === keySearch || document.activeElement === ownIntervalSec) {
       if (e.key === 'Escape') {
         e.preventDefault();
         capture.focus();
@@ -818,6 +1197,9 @@ async function init() {
       const saved = JSON.parse(raw);
       config = { ...structuredClone(DEFAULTS), ...saved };
       if (!Array.isArray(config.steps)) config.steps = structuredClone(DEFAULTS.steps);
+      if (!config.route || !Array.isArray(config.route.legs)) config.route = structuredClone(DEFAULTS.route);
+      delete config.route.battle;
+      delete config.route.minimap;
     }
   } catch (_) {
     /* usa os padrões */
@@ -828,6 +1210,7 @@ async function init() {
   renderSteps();
   renderTiming();
   renderOptions();
+  renderRoute();
   renderTarget();
   renderRunState();
   renderStats();

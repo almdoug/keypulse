@@ -1,6 +1,6 @@
 # KeyPulse
 
-Envia combinações de teclas (ex.: `Ctrl+Alt+F1`, `Ctrl+F2`) para qualquer janela aberta, a cada X segundos.
+Envia combinações de teclas (ex.: `Ctrl+Alt+F1`, `Ctrl+F2`) e ações de mouse (cliques e scroll) para qualquer janela aberta, a cada X segundos.
 
 ## Usar
 
@@ -12,6 +12,16 @@ Abra `target\release\keypulse.exe` — sem instalação nem login.
 4. Clique em **Iniciar** (ou `Ctrl+Shift+F12` de qualquer lugar).
 
 A configuração é salva automaticamente em `%APPDATA%\KeyPulse\config.json`.
+
+**Intervalo próprio por tecla**: no editor de combinação, ligue *Intervalo próprio* para que aquela tecla repita no seu próprio ritmo (ex.: `F1` a cada 2 s e `F5` a cada 10 min). As demais seguem juntas, como sequência principal, no intervalo geral. Quando dois envios vencem ao mesmo tempo, saem juntos numa só troca de foco. Com *Limitado*, cada tecla independente e a sequência principal repetem o número de vezes definido.
+
+**Rota de caminhada**: ligue o cartão *Rota de caminhada* para andar de box em box em loop enquanto a sequência continua rodando. A rota é uma lista de trechos: *Parado* (N segundos) e *Andar* (uma seta × N sqm). O *Tempo por sqm* (padrão 300 ms) é a espera entre uma seta e a próxima; se o personagem andar menos sqm que o esperado, aumente esse valor. Exemplo: Parado 10 s → → × 10 → Parado 10 s → ← × 10 (volta ao início). Durante a execução o trecho atual fica destacado com o progresso (ex.: `6/10`).
+
+**Gravar a rota**: em vez de montar os trechos à mão, clique em **Gravar**, vá para o jogo e faça o caminho da cave apertando as setas (1 toque = 1 sqm), terminando onde começou. Pare com **Ctrl+Shift+F12** (ou *Parar e usar*). Só as setas apertadas com a janela alvo em primeiro plano entram na gravação; o tempo antes do primeiro toque é ignorado. Toques seguidos na mesma direção viram *Andar × N*, pausas de 1 s ou mais viram *Parado* e o tempo entre o último toque e o fim vira a parada final antes de recomeçar. A gravação substitui os trechos atuais, que podem ser ajustados depois.
+
+**Salvar, importar e limpar a rota**: **Salvar** grava a rota (trechos e *Tempo por sqm*) num arquivo `.json`, e o nome do arquivo vira o nome da hunt. Mande esse arquivo para outro jogador, que usa **Importar** para carregar a mesma rota; a importação substitui os trechos atuais. **Limpar tudo** apaga todos os trechos de uma vez (clique duas vezes para confirmar).
+
+**Mouse**: a paleta tem *Clique esquerdo*, *Clique direito*, *Clique do scroll*, *Scroll ↑* e *Scroll ↓* (também combináveis com Ctrl/Alt/Shift). O clique acontece onde o cursor está, se ele estiver sobre a janela alvo; senão, no centro dela. No modo *Focar janela* o cursor vai até lá só durante o clique e depois volta.
 
 **Modos de envio**
 - *Focar janela*: traz a janela para frente e simula o teclado real (SendInput). Funciona em praticamente tudo.

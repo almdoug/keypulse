@@ -74,9 +74,48 @@
           <ol class="steps" id="stepsList"></ol>
         </div>
 
-        <div class="card">
+        <div class="card route-card" id="routeCard">
           <div class="card-head">
             <div class="step-badge">3</div>
+            <div class="ch-text">
+              <h3>Rota de caminhada</h3>
+              <p id="routeSub">Anda de box em box em loop, enquanto a sequência continua</p>
+            </div>
+            <button class="btn btn-ghost" id="routeImportBtn" title="Abre uma rota salva (de você ou de outro jogador)"><span data-icon="upload"></span>Importar</button>
+            <button class="btn btn-ghost" id="routeExportBtn" title="Salva a rota num arquivo para guardar ou compartilhar a hunt"><span data-icon="download"></span>Salvar</button>
+            <button class="btn btn-soft rec-btn" id="recordBtn" title="Grava as setas que você apertar no jogo e transforma em trechos"><span class="rec-ico"></span>Gravar</button>
+            <input type="checkbox" class="switch" id="routeOn" title="Ligar rota" />
+          </div>
+          <div class="rec-banner" id="recBanner" hidden>
+            <span class="rec-dot"></span>
+            <div class="rec-text">
+              <b>Gravando as setas</b>
+              <span>Vá para o jogo e faça o caminho da cave. Termine onde começou. <span id="recCount">Nenhuma seta ainda</span></span>
+            </div>
+            <span class="rec-keys"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>F12</kbd> para</span>
+            <button class="btn btn-ghost" id="recCancel">Cancelar</button>
+            <button class="btn btn-primary" id="recStop">Parar e usar</button>
+          </div>
+          <div class="route-body" id="routeBody">
+            <ol class="legs" id="legsList"></ol>
+            <div class="route-foot">
+              <button class="btn btn-soft" id="addWaitBtn"><span data-icon="clock"></span>Parado</button>
+              <button class="btn btn-soft" id="addMoveBtn"><span data-icon="plus"></span>Andar</button>
+              <button class="btn btn-ghost danger-ghost" id="clearLegsBtn" title="Remove todos os trechos da rota"><span data-icon="trash"></span>Limpar tudo</button>
+              <div class="route-speed">
+                <span>Tempo por sqm</span>
+                <div class="num-input small">
+                  <input id="routeStepMs" type="number" min="50" step="10" />
+                  <span class="unit">ms</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <div class="step-badge">4</div>
             <div class="ch-text">
               <h3>Temporização</h3>
               <p>Frequência dos ciclos e velocidade das teclas</p>
@@ -127,7 +166,7 @@
 
         <div class="card">
           <div class="card-head">
-            <div class="step-badge">4</div>
+            <div class="step-badge">5</div>
             <div class="ch-text">
               <h3>Modo de envio</h3>
               <p>Como as teclas chegam até a janela</p>
@@ -251,6 +290,20 @@
         </label>
       </div>
       <div class="key-palette" id="keyPalette"></div>
+
+      <div class="own-interval">
+        <label class="oi-toggle">
+          <input type="checkbox" class="switch" id="ownIntervalOn" />
+          <span class="tr-text">
+            <b>Intervalo próprio</b>
+            <span>Repete esta tecla no seu próprio ritmo, fora da sequência principal</span>
+          </span>
+        </label>
+        <div class="num-input small" id="ownIntervalWrap">
+          <input id="ownIntervalSec" type="number" min="0.1" step="0.5" />
+          <span class="unit">seg</span>
+        </div>
+      </div>
 
       <div class="modal-foot">
         <span class="foot-preview" id="footPreview"></span>

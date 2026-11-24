@@ -1,5 +1,5 @@
-//! Simulação de teclado: via SendInput (janela em foco) ou via PostMessage
-//! (segundo plano, sem roubar o foco).
+//! Simulação de teclado e mouse: via SendInput (janela em foco) ou via
+//! PostMessage (segundo plano, sem roubar o foco).
 
 use std::mem::{size_of, zeroed};
 use std::ptr::null_mut;
@@ -7,23 +7,88 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use serde::Deserialize;
-use windows_sys::Win32::Foundation::HWND;
+use windows_sys::Win32::Foundation::{HWND, POINT, RECT};
+use windows_sys::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
 use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyboardState, MapVirtualKeyW, SendInput, SetKeyboardState, INPUT, INPUT_KEYBOARD,
-    KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, VK_CONTROL, VK_LCONTROL, VK_LMENU,
-    VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
+    INPUT_MOUSE, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC, MOUSEEVENTF_LEFTDOWN,
+    MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_RIGHTDOWN,
+    MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL, MOUSE_EVENT_FLAGS, VK_CONTROL, VK_LBUTTON, VK_LCONTROL,
+    VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MBUTTON, VK_MENU, VK_RBUTTON, VK_RCONTROL, VK_RMENU,
+    VK_RSHIFT, VK_RWIN, VK_SHIFT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, GetForegroundWindow, GetGUIThreadInfo, GetWindowThreadProcessId, IsChild,
-    IsIconic, IsWindow, PeekMessageW, PostMessageW, SendMessageTimeoutW, SetForegroundWindow,
-    ShowWindow, GUITHREADINFO, MSG, PM_NOREMOVE, SMTO_ABORTIFHUNG, SW_RESTORE, WA_ACTIVE,
-    WA_INACTIVE, WM_ACTIVATE, WM_KEYDOWN, WM_KEYUP, WM_NULL, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    BringWindowToTop, ChildWindowFromPointEx, GetAncestor, GetClientRect, GetCursorPos,
+    GetForegroundWindow, GetGUIThreadInfo, GetWindowRect, GetWindowThreadProcessId, IsChild,
+    IsIconic, IsWindow, PeekMessageW, PostMessageW, SendMessageTimeoutW, SetCursorPos,
+    SetForegroundWindow, ShowWindow, WindowFromPoint, CWP_SKIPDISABLED, CWP_SKIPINVISIBLE,
+    CWP_SKIPTRANSPARENT, GA_ROOT, GUITHREADINFO, MSG, PM_NOREMOVE, SMTO_ABORTIFHUNG, SW_RESTORE,
+    WA_ACTIVE, WA_INACTIVE, WHEEL_DELTA, WM_ACTIVATE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NULL,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 /// Tecla "neutra" sem função atribuída, usada para impedir que um toque de
 /// Alt ative a barra de menus (mesma técnica do AutoHotkey).
 const VK_MASK: u16 = 0xE8;
+
+/// Flags `MK_*` do wParam das mensagens de mouse.
+const MK_LBUTTON: usize = 0x01;
+const MK_RBUTTON: usize = 0x02;
+const MK_SHIFT: usize = 0x04;
+const MK_CONTROL: usize = 0x08;
+const MK_MBUTTON: usize = 0x10;
+
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum MouseAction {
+    Left,
+    Right,
+    Middle,
+    WheelUp,
+    WheelDown,
+}
+
+/// Como enviar um clique: botão virtual, flag MK_*, mensagens down/up e flags SendInput down/up.
+struct Button {
+    vk: u16,
+    mk: usize,
+    msg_down: u32,
+    msg_up: u32,
+    input_down: MOUSE_EVENT_FLAGS,
+    input_up: MOUSE_EVENT_FLAGS,
+}
+
+impl MouseAction {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Left => "Clique esquerdo",
+            Self::Right => "Clique direito",
+            Self::Middle => "Clique do scroll",
+            Self::WheelUp => "Scroll ↑",
+            Self::WheelDown => "Scroll ↓",
+        }
+    }
+
+    fn button(self) -> Option<Button> {
+        let b = |vk, mk, msg_down, msg_up, input_down, input_up| Button { vk, mk, msg_down, msg_up, input_down, input_up };
+        match self {
+            Self::Left => Some(b(VK_LBUTTON, MK_LBUTTON, WM_LBUTTONDOWN, WM_LBUTTONUP, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP)),
+            Self::Right => Some(b(VK_RBUTTON, MK_RBUTTON, WM_RBUTTONDOWN, WM_RBUTTONUP, MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP)),
+            Self::Middle => Some(b(VK_MBUTTON, MK_MBUTTON, WM_MBUTTONDOWN, WM_MBUTTONUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP)),
+            Self::WheelUp | Self::WheelDown => None,
+        }
+    }
+
+    fn wheel_delta(self) -> i32 {
+        match self {
+            Self::WheelUp => WHEEL_DELTA as i32,
+            Self::WheelDown => -(WHEEL_DELTA as i32),
+            _ => 0,
+        }
+    }
+}
 
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -36,7 +101,11 @@ pub struct Combo {
     pub shift: bool,
     #[serde(default)]
     pub win: bool,
+    #[serde(default)]
     pub vk: u16,
+    /// Quando presente, o passo é uma ação de mouse e `vk` é ignorado.
+    #[serde(default)]
+    pub mouse: Option<MouseAction>,
     #[serde(default)]
     pub label: String,
 }
@@ -66,7 +135,11 @@ impl Combo {
                 parts.push(name.into());
             }
         }
-        parts.push(if self.label.is_empty() { format!("VK {:#04X}", self.vk) } else { self.label.clone() });
+        parts.push(match (self.mouse, self.label.is_empty()) {
+            (_, false) => self.label.clone(),
+            (Some(m), true) => m.name().into(),
+            (None, true) => format!("VK {:#04X}", self.vk),
+        });
         parts.join("+")
     }
 }
@@ -104,25 +177,77 @@ fn send(inputs: &[INPUT]) -> Result<(), String> {
     }
 }
 
-/// Pressiona modificadores → tecla → solta tudo na ordem inversa.
-pub fn press_combo(c: &Combo, hold_ms: u64) -> Result<(), String> {
+/// Pressiona modificadores → tecla (ou botão do mouse) → solta tudo na ordem inversa.
+/// A janela alvo precisa estar em primeiro plano.
+pub fn press_combo(hwnd: HWND, c: &Combo, hold_ms: u64) -> Result<(), String> {
     let mods = c.modifiers();
     let downs: Vec<INPUT> = mods.iter().map(|&m| key_input(m, false)).collect();
     if !downs.is_empty() {
         send(&downs)?;
         sleep(Duration::from_millis(12));
     }
-    let result = send(&[key_input(c.vk, false)]).and_then(|_| {
-        sleep(Duration::from_millis(hold_ms));
-        send(&[key_input(c.vk, true)])
-    });
+    let result = match c.mouse {
+        Some(m) => press_mouse(hwnd, m, hold_ms),
+        None => send(&[key_input(c.vk, false)]).and_then(|_| {
+            sleep(Duration::from_millis(hold_ms));
+            send(&[key_input(c.vk, true)])
+        }),
+    };
     if !mods.is_empty() {
         sleep(Duration::from_millis(12));
-        // Libera os modificadores mesmo se a tecla falhou, para não deixá-los "presos".
+        // Libera os modificadores mesmo se a ação falhou, para não deixá-los "presos".
         let ups: Vec<INPUT> = mods.iter().rev().map(|&m| key_input(m, true)).collect();
         send(&ups)?;
     }
     result
+}
+
+fn mouse_input(flags: MOUSE_EVENT_FLAGS, data: i32) -> INPUT {
+    let mut input: INPUT = unsafe { zeroed() };
+    input.r#type = INPUT_MOUSE;
+    input.Anonymous.mi.dwFlags = flags;
+    input.Anonymous.mi.mouseData = data as u32;
+    input
+}
+
+/// Centro da área cliente da janela, em coordenadas de tela.
+fn client_center(hwnd: HWND) -> POINT {
+    unsafe {
+        let mut rc: RECT = zeroed();
+        GetClientRect(hwnd, &mut rc);
+        let mut pt = POINT { x: (rc.right - rc.left) / 2, y: (rc.bottom - rc.top) / 2 };
+        ClientToScreen(hwnd, &mut pt);
+        pt
+    }
+}
+
+/// Clique/scroll real (SendInput) na posição atual do cursor. Se o cursor não estiver
+/// sobre a janela alvo, ele vai ao centro dela só durante o envio e depois volta,
+/// para que o clique nunca caia em outra janela.
+fn press_mouse(hwnd: HWND, m: MouseAction, hold_ms: u64) -> Result<(), String> {
+    unsafe {
+        let mut original = POINT { x: 0, y: 0 };
+        GetCursorPos(&mut original);
+        let under = WindowFromPoint(original);
+        let over_target = !under.is_null() && GetAncestor(under, GA_ROOT) == hwnd;
+        if !over_target {
+            let c = client_center(hwnd);
+            SetCursorPos(c.x, c.y);
+            sleep(Duration::from_millis(15));
+        }
+        let result = match m.button() {
+            Some(b) => send(&[mouse_input(b.input_down, 0)]).and_then(|_| {
+                sleep(Duration::from_millis(hold_ms));
+                send(&[mouse_input(b.input_up, 0)])
+            }),
+            None => send(&[mouse_input(MOUSEEVENTF_WHEEL, m.wheel_delta())]),
+        };
+        if !over_target {
+            sleep(Duration::from_millis(15));
+            SetCursorPos(original.x, original.y);
+        }
+        result
+    }
 }
 
 fn key_lparam(vk: u16, up: bool, alt_down: bool) -> isize {
@@ -271,6 +396,9 @@ fn send_sync(hwnd: HWND, msg: u32, wparam: usize) {
 /// Modo segundo plano: posta mensagens de teclado direto na janela, simulando
 /// também o estado dos modificadores para que atalhos como Ctrl+J funcionem.
 pub fn post_combo(hwnd: HWND, c: &Combo, hold_ms: u64) -> Result<(), String> {
+    if let Some(m) = c.mouse {
+        return post_mouse(hwnd, c, m, hold_ms);
+    }
     let _active = FakeActivation::begin(hwnd);
     let target = focused_child(hwnd);
     let keys = SharedKeyState::attach(target);
@@ -302,6 +430,90 @@ pub fn post_combo(hwnd: HWND, c: &Combo, hold_ms: u64) -> Result<(), String> {
     while let Some(vk) = pressed.pop() {
         keys.set(&pressed);
         post(vk, true, &pressed)?;
+    }
+    Ok(())
+}
+
+fn make_lparam(x: i32, y: i32) -> isize {
+    ((x as u16 as u32) | ((y as u16 as u32) << 16)) as i32 as isize
+}
+
+/// Ponto (em coordenadas de tela) do clique em segundo plano: a posição do cursor
+/// se ele estiver sobre a janela alvo, senão o centro da área cliente.
+fn background_point(hwnd: HWND) -> POINT {
+    unsafe {
+        let mut pt = POINT { x: 0, y: 0 };
+        let mut rc: RECT = zeroed();
+        let inside = GetCursorPos(&mut pt) != 0
+            && GetWindowRect(hwnd, &mut rc) != 0
+            && (rc.left..rc.right).contains(&pt.x)
+            && (rc.top..rc.bottom).contains(&pt.y);
+        if inside { pt } else { client_center(hwnd) }
+    }
+}
+
+/// Controle filho mais profundo sob o ponto (ex.: a área de conteúdo do Chrome),
+/// que é quem de fato processa o mouse.
+fn deepest_child_at(hwnd: HWND, screen: POINT) -> HWND {
+    let mut current = hwnd;
+    for _ in 0..32 {
+        let mut pt = screen;
+        unsafe { ScreenToClient(current, &mut pt) };
+        let flags = CWP_SKIPINVISIBLE | CWP_SKIPDISABLED | CWP_SKIPTRANSPARENT;
+        let child = unsafe { ChildWindowFromPointEx(current, pt, flags) };
+        if child.is_null() || child == current {
+            break;
+        }
+        current = child;
+    }
+    current
+}
+
+/// Modo segundo plano: posta as mensagens de mouse direto na janela, sem mover o cursor.
+fn post_mouse(hwnd: HWND, c: &Combo, m: MouseAction, hold_ms: u64) -> Result<(), String> {
+    let _active = FakeActivation::begin(hwnd);
+    let screen = background_point(hwnd);
+    let target = deepest_child_at(hwnd, screen);
+    let mut client = screen;
+    unsafe { ScreenToClient(target, &mut client) };
+    let at_client = make_lparam(client.x, client.y);
+
+    let mods = c.modifiers();
+    let mut mk = 0usize;
+    if c.ctrl {
+        mk |= MK_CONTROL;
+    }
+    if c.shift {
+        mk |= MK_SHIFT;
+    }
+    // Ctrl/Alt/Shift também ficam visíveis para GetKeyState durante o envio.
+    let keys = SharedKeyState::attach(target);
+    keys.set(&mods);
+
+    let post = |msg: u32, wparam: usize, lparam: isize| -> Result<(), String> {
+        if unsafe { PostMessageW(target, msg, wparam, lparam) } == 0 {
+            return Err("Falha ao enviar mensagem para a janela".into());
+        }
+        flush(target);
+        Ok(())
+    };
+
+    post(WM_MOUSEMOVE, mk, at_client)?;
+    match m.button() {
+        Some(b) => {
+            let mut pressed = mods.clone();
+            pressed.push(b.vk);
+            keys.set(&pressed);
+            post(b.msg_down, mk | b.mk, at_client)?;
+            sleep(Duration::from_millis(hold_ms));
+            keys.set(&mods);
+            post(b.msg_up, mk, at_client)?;
+        }
+        None => {
+            // WM_MOUSEWHEEL leva o delta na palavra alta e coordenadas de tela no lParam.
+            let wparam = ((m.wheel_delta() as i16 as u16 as usize) << 16) | mk;
+            post(WM_MOUSEWHEEL, wparam, make_lparam(screen.x, screen.y))?;
+        }
     }
     Ok(())
 }
